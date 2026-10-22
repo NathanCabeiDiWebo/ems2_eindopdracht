@@ -1,0 +1,90 @@
+import network
+import time
+import socket
+import binascii
+from umqtt.simple import MQTTClient
+
+from wifi_secrets import SSID, PASSWORD
+
+def bericht_ontvangen(topic, bericht):
+    topic_datum = topic.decode()
+    
+wlan = network.WLAN(network.STA_IF)
+wlan.active(True)
+
+wlan.connect(SSID, PASSWORD)  # Verbinden
+
+print("Verbinding maken", end="")
+while not wlan.isconnected():
+    print(".", end="")
+    time.sleep_ms(500)
+
+print()
+
+ip, subnet, gateway, dns = wlan.ifconfig()
+print("IP-adres:\t", ip)
+print("Subnetmasker:\t", subnet)
+print("Gateway:\t", gateway)
+print("DNS-server:\t", dns)
+
+#Verbind esp1 naar esp2
+ESP2_IP = "192.168.0.159" #esp1 ip
+PORT = 2000
+
+address = (ESP2_IP, PORT)
+socket_naar_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+socket_naar_server.connect(address)
+socket_naar_server.setblocking(False)
+
+print("connected to esp1 server")
+print("")
+    
+#connect to broker
+BROKER = "broker.hivemq.com"
+MQTTPORT = 1883
+
+ESP2_ID = binascii.hexlify(wlan.config('mac')).decode()
+CLIENT_ID = ("ESP2" + ESP2_ID).encode()
+
+BASISTOPIC = "EMS2/" + ESP2_ID
+DATUMTOPIC = (BASISTOPIC + "/datum").encode()
+
+client = MQTTClient(CLIENT_ID, BROKER, MQTTPORT, keepalive=60)
+client.set_callback(bericht_ontvangen)
+client.connect()
+client.subscribe(DATUMTOPIC)
+
+print("verbonden met MQTT BROKER:", BROKER)
+print("topic:", DATUMTOPIC.decode())
+
+last_ping = time.ticks_ms()
+
+#main loop
+try:
+    while True:
+        try:
+            data = socket_naar_server.recv(100)
+            
+            if not data:
+                print("esp2 Disc.")
+                break
+            print("socket ontvangen:", data)
+            
+            client.publish(DATUMTOPIC, data)
+            
+        except OSError:
+            pass
+        
+        client.check_msg()
+            
+        if time.ticks_diff(time.ticks_ms(), last_ping) >= 30000:
+            client.ping()
+            last_ping = time.ticks_ms()
+            
+        time.sleep_ms(20)
+
+finally:
+    socket_naar_server.close()
+    client.disconnect()
+    print("topa g")
